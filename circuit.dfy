@@ -139,6 +139,44 @@ module BackwardConnections
         CombineMaps(bc1, backconns2)
     }
 
+    lemma CombineBackconnsHelper(
+            offset: nat,
+            bc1: map<INodePort, ONodePort>, bc2: map<INodePort, ONodePort>, result: map<INodePort, ONodePort>)
+        requires
+            forall inp :: inp in bc1 ==> inp.node_id < offset
+        requires 
+            result == CombineBackconns(offset, bc1, bc2);
+        ensures
+            forall inp :: inp in bc1 ==> (
+                inp in result &&
+                result[inp] == bc1[inp])
+        ensures
+            forall inp :: inp in bc2 ==> (
+                inodeport(inp.node_id+offset, inp.port_id) in result &&
+                result[inodeport(inp.node_id+offset, inp.port_id)] == onodeport(bc2[inp].node_id+offset, bc2[inp].port_id))
+    {
+        var f:= (inp: INodePort) => inodeport(inp.node_id + offset, inp.port_id);
+        var g := (onp: ONodePort) => onodeport(onp.node_id + offset, onp.port_id);
+        var backconns2 := UpdateMap(bc2, f, g);
+        assert forall inp :: inp in bc2 ==> inodeport(inp.node_id+offset, inp.port_id) in backconns2;
+        assert backconns2 == UpdateMap(bc2, f, g);
+    }
+
+    lemma CombineBackconnsHelper2(
+            offset: nat,
+            bc1: map<INodePort, ONodePort>, bc2: map<INodePort, ONodePort>, result: map<INodePort, ONodePort>, inp: INodePort)
+        requires
+            forall inp :: inp in bc1 ==> inp.node_id < offset
+        requires 
+            result == CombineBackconns(offset, bc1, bc2);
+        requires inp in bc2
+        ensures
+            inodeport(inp.node_id+offset, inp.port_id) in result
+        ensures
+            result[inodeport(inp.node_id+offset, inp.port_id)] == onodeport(bc2[inp].node_id+offset, bc2[inp].port_id)
+    {
+        CombineBackconnsHelper(offset, bc1, bc2, result);
+    }
 }
 
 
@@ -198,33 +236,58 @@ module CombineCircuits {
         true
     }
 
-    lemma CombineCircuitsCorrect(c1: Circuit, c2: Circuit)
+    lemma CombineCircuitsCorrectHelper(c1: Circuit, c2: Circuit, r: Circuit)
         requires Wellformed(c1)
         requires Wellformed(c2)
+        requires r_is_result: r == CombineCircuits(c1, c2)
+    {
+        assert  r.backconns == 
+            BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns) by {
+                reveal r_is_result;
+            }
+    }
+
+
+    lemma CombineCircuitsCorrectC1(c1: Circuit, c2: Circuit, r: Circuit)
+        requires Wellformed(c1)
+        requires Wellformed(c2)
+        requires r == CombineCircuits(c1, c2)
         ensures
-            var r := CombineCircuits(c1, c2);
+            var offset := |c1.nodes|;
+            // The original c1 has an image in r.
+            IsEquivalentCircuit(a=>true, a=>a, c1, r) &&
+            // This subset of r has an image in c1.
+            IsEquivalentCircuit(a=>a < offset, a=>a, r, c1)
+    {
+    }
+
+    lemma CombineCircuitsCorrect(c1: Circuit, c2: Circuit, r: Circuit)
+        requires Wellformed(c1)
+        requires Wellformed(c2)
+        requires r_is_result: r == CombineCircuits(c1, c2)
+        ensures
             var offset := |c1.nodes|;
             // The original c1 has an image in r.
             IsEquivalentCircuit(a=>true, a=>a, c1, r) &&
             // This subset of r has an image in c1.
             IsEquivalentCircuit(a=>a < offset, a=>a, r, c1) &&
-/*
-            FIXME: These have been commented out for now
-                   otherwise it takes longer than 20s to solve.
 
             // The original c2 has an image in r.
             IsEquivalentCircuit(a=>true, a=>a+offset, c2, r) &&
+/*
+            FIXME: These have been commented out for now
+                   otherwise it takes longer than 20s to solve.
             // All ports in r have equivalents in either c1 or c2.
             CanBackAssign(c1, c2, r, a=>a < offset, a=> a >= offset, a=>a, a requires a >= offset => sub(a, offset)) &&
             // This subset of r has an image in c2.
             IsEquivalentCircuit(a=>a >= offset, a requires a >= offset => sub(a, offset), r, c2) &&
 */
             true
-    {
+    { 
         // Trying to prove:
         // The original c2 has an image in r.
         // IsEquivalentCircuit(a=>true, a=>a+offset, c2, r)
-        var r := CombineCircuits(c1, c2);
+
         var offset := |c1.nodes|;
         var node_is_member := a=>true;
         var node_map := a=>a+offset;
@@ -243,7 +306,54 @@ module CombineCircuits {
                 var inp2 := inodeport(inp.node_id+offset, inp.port_id);
                 var onp := c2.backconns[inp];
                 onodeport(onp.node_id+offset, onp.port_id) == r.backconns[inp2];
-            // Would put more stuff here but it's already timing out.
         }
+        assert basic_result: r.backconns == BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns)
+            by {
+                reveal r_is_result;
+            }
+
+        forall inp | inp in c2.backconns
+        {
+            calc {
+                inodeport(inp.node_id+offset, inp.port_id) in r.backconns &&
+                var inp2 := inodeport(inp.node_id+offset, inp.port_id);
+                var onp := c2.backconns[inp];
+                onodeport(onp.node_id+offset, onp.port_id) == r.backconns[inp2];
+
+                {reveal basic_result;}
+                inodeport(inp.node_id+offset, inp.port_id) in 
+                BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns) &&
+                var inp2 := inodeport(inp.node_id+offset, inp.port_id);
+                var onp := c2.backconns[inp];
+                onodeport(onp.node_id+offset, onp.port_id) ==
+                BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns)[inp2];
+                
+                inodeport(inp.node_id+offset, inp.port_id) in 
+                BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns) &&
+                var inp2 := inodeport(inp.node_id+offset, inp.port_id);
+                var onp := c2.backconns[inp];
+                onodeport(onp.node_id+offset, onp.port_id) ==
+                BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns)[inp2];
+
+                {
+                    var inp2 := inodeport(inp.node_id+offset, inp.port_id);
+                    BackwardConnections.CombineBackconnsHelper2(
+                    offset, c1.backconns, c2.backconns,
+                    BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns),
+                    inp
+                    );
+                    assert 
+                        BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns)[inp2] ==
+                        onodeport(c2.backconns[inp].node_id+offset, c2.backconns[inp].port_id);
+                    assert 
+                        inodeport(inp.node_id+offset, inp.port_id) in 
+                        BackwardConnections.CombineBackconns(|c1.nodes|, c1.backconns, c2.backconns);
+                }
+
+                true;
+            }
+        }
+        reveal r_is_result;
+        CombineCircuitsCorrectC1(c1, c2, r);
     }
 }
